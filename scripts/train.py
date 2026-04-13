@@ -94,7 +94,7 @@ def train_random_forest(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=Tr
             mlflow.log_params({f"weight_{k}": v for k, v in config.FEATURE_WEIGHTS.items()})
             mlflow.log_metric("val_auc_roc", val_auc)
             for k, v in ranking_metrics.items():
-                mlflow.log_metric(f"val_{k}", v)
+                mlflow.log_metric(f"val_{k.replace('@', '_at_')}", v)
             mlflow.log_dict({f[0]: float(f[1]) for f in importances}, "feature_importances.json")
             mlflow.sklearn.log_model(model, "random_forest_model")
             print("  Logged to MLflow ✓")
@@ -180,7 +180,7 @@ def train_lightgbm(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=True):
             mlflow.log_params(config.LGBM_PARAMS)
             mlflow.log_params({f"weight_{k}": v for k, v in config.FEATURE_WEIGHTS.items()})
             for k, v in ranking_metrics.items():
-                mlflow.log_metric(f"val_{k}", v)
+                mlflow.log_metric(f"val_{k.replace('@', '_at_')}", v)
             mlflow.log_dict({f[0]: float(f[1]) for f in importances}, "feature_importances.json")
             mlflow.lightgbm.log_model(model, "lgbm_model")
             print("  Logged to MLflow ✓")

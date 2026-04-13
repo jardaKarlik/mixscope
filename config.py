@@ -12,9 +12,17 @@ DATA_DIR        = "data"
 MODELS_DIR      = "models/saved"
 EXPERIMENTS_DIR = "experiments"
 
-TRANSITIONS_CSV = f"{DATA_DIR}/transitions.csv"   # from DJ set scraper
-PLAYLISTS_CSV   = f"{DATA_DIR}/playlists.csv"     # from Spotify / YouTube playlists
-TRACK_META_CSV  = f"{DATA_DIR}/track_metadata.csv" # BPM, key, genre per track
+# Auto-detects sample files if real corpus files don't exist yet.
+# Once you have real data, drop transitions.csv / playlists.csv / track_metadata.csv
+# into data/ and the sample files will be ignored automatically.
+import os as _os
+def _data(real, sample):
+    real_path = f"{DATA_DIR}/{real}"
+    return real_path if _os.path.exists(real_path) else f"{DATA_DIR}/{sample}"
+
+TRANSITIONS_CSV = _data("transitions.csv",   "sample_transitions.csv")
+PLAYLISTS_CSV   = _data("playlists.csv",     "sample_playlists.csv")
+TRACK_META_CSV  = _data("track_metadata.csv","sample_track_metadata.csv")
 
 # ─── Reproducibility ─────────────────────────────────────────────────────────
 RANDOM_SEED = 42

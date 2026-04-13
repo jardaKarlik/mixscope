@@ -52,26 +52,50 @@ def load_model():
 
 
 def find_track_id(query: str, track_metadata: pd.DataFrame) -> str:
-    """Fuzzy match track name to track_id."""
-    query_lower = query.lower()
+    """Fuzzy match track name to track_id.
+    Handles 'Artist - Title', 'Artist Title', and partial matches.
+    """
+    # Normalise query: lowercase, strip separators for flexible matching
+    query_lower = query.lower().strip()
+    query_clean = query_lower.replace(" - ", " ").replace("-", " ").replace("  ", " ")
+
     meta = track_metadata.copy()
-    meta["_match"] = meta.apply(
-        lambda r: (
-            str(r.get("artist","")).lower() + " " +
-            str(r.get("title","")).lower()
-        ), axis=1
+    # Build match string variants
+    meta["_match_full"]  = meta.apply(
+        lambda r: f"{str(r.get('artist','')).lower()} - {str(r.get('title','')).lower()}", axis=1
     )
-    # Exact match first
-    exact = meta[meta["_match"] == query_lower]
+    meta["_match_clean"] = meta.apply(
+        lambda r: f"{str(r.get('artist','')).lower()} {str(r.get('title','')).lower()}", axis=1
+    )
+
+    # 1. Exact match with separator
+    exact = meta[meta["_match_full"] == query_lower]
     if len(exact):
         return exact.iloc[0]["track_id"]
 
-    # Partial match
-    partial = meta[meta["_match"].str.contains(query_lower, na=False)]
+    # 2. Exact match without separator
+    exact2 = meta[meta["_match_clean"] == query_clean]
+    if len(exact2):
+        return exact2.iloc[0]["track_id"]
+
+    # 3. Partial match on clean string
+    partial = meta[meta["_match_clean"].str.contains(query_clean, na=False)]
     if len(partial):
         return partial.iloc[0]["track_id"]
 
-    raise ValueError(f"Track not found: '{query}'. Try the exact 'Artist - Title' format.")
+    # 4. Each word must appear somewhere
+    words = [w for w in query_clean.split() if len(w) > 2]
+    if words:
+        mask = meta["_match_clean"].apply(lambda m: all(w in str(m) for w in words))
+        word_match = meta[mask]
+        if len(word_match):
+            return word_match.iloc[0]["track_id"]
+
+    raise ValueError(
+        f"Track not found: '{query}'.\n"
+        f"Available tracks:\n" +
+        "\n".join(f"  {r['artist']} - {r['title']}" for _, r in meta.head(10).iterrows())
+    )
 
 
 def predict(
