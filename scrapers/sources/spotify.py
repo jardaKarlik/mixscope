@@ -85,6 +85,7 @@ class SpotifyScraper:
                 "type":   "playlist",
                 "limit":  min(50, limit - len(results)),
                 "offset": offset,
+                "market": "US",
             })
             items = data.get("playlists", {}).get("items", [])
             if not items:
