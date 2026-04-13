@@ -1,0 +1,113 @@
+# scraper_config.yaml
+# ====================
+# Per-source filter parameters. Tune these to control volume and quality.
+# All sources respect rate limits — we never hammer an API.
+#
+# To disable a source: set enabled: false
+# To run manually:     python scrapers/run_scraper.py --source spotify
+
+spotify:
+  enabled: true
+  # Playlist types to collect. "editorial" = Spotify curated, high quality.
+  playlist_types: ["editorial", "user"]
+  min_followers: 500             # skip tiny playlists
+  max_playlists_per_run: 300     # Spotify API is generous, safe to go higher
+  # Co-occurrence window: tracks within ±N positions count as neighbors
+  # Larger window = more pairs, weaker signal per pair
+  window_size: 5
+  search_queries:
+    - "techno mix"
+    - "house DJ set"
+    - "electronic mix"
+    - "deep house playlist"
+    - "minimal techno"
+    - "berlin techno"
+  requests_per_second: 5         # Spotify allows ~10/s, stay conservative
+
+youtube:
+  enabled: true
+  # YouTube Data API v3 quota: 10,000 units/day free
+  # search.list = 100 units, videos.list = 1 unit
+  # At 5000 units/run we can do ~45 searches + 4500 video lookups
+  quota_per_run: 5000
+  min_video_duration_minutes: 45  # DJ sets are long — ignore short clips
+  min_views: 5000
+  # Channel whitelist — trusted DJ set channels only (avoids wasting quota)
+  channel_whitelist:
+    - UCGmHkBFCDCYqnVhIXkMOpYg    # Boiler Room
+    - UCXIyz409s7bNWVcM-vjfdVA    # NTS Radio
+    - UC_kRDKYrUlrbtrSiyu5Tflg    # Resident Advisor
+    - UCpDJl2EmP7Oh90Vyl9VTHtw    # FACT Magazine
+    - UCnbABMEFSIFR0xekOs0pMpw    # fabric London
+    - UCZ3KJdCer7oObmPmvGEFUCg    # Dekmantel
+    - UCM5HMnMKNiP-0PnWaKnMdpA    # Tresor Berlin
+  # Also search for sets outside whitelist, but consume quota carefully
+  search_queries:
+    - "techno DJ set tracklist 2023"
+    - "house DJ live set tracklist"
+    - "electronic mix tracklist description"
+  date_from: "2019-01-01"
+  requests_per_second: 1          # YouTube API is strict on rate limits
+
+mixcloud:
+  enabled: true
+  min_play_count: 2000
+  min_duration_minutes: 45
+  genres:
+    - "techno"
+    - "house"
+    - "electronic"
+    - "minimal"
+    - "deep-house"
+    - "tech-house"
+  max_per_run: 500
+  requests_per_second: 2
+
+soundcloud:
+  enabled: false                  # Enable once you have client credentials
+  min_plays: 5000
+  min_duration_minutes: 45
+  tags:
+    - "techno"
+    - "house"
+    - "dj set"
+    - "live set"
+  max_per_run: 300
+  requests_per_second: 2
+
+one001tracklists:
+  enabled: true
+  # HTML scraping — no API, be polite with rate limits
+  max_per_run: 500
+  min_tracklist_length: 10        # skip short playlists that aren't real sets
+  requests_per_second: 0.5        # 1 request every 2 seconds — be a good citizen
+  # Filter by genre tags on 1001tracklists
+  genres:
+    - "techno"
+    - "house"
+    - "electro"
+    - "minimal"
+
+resident_advisor:
+  enabled: true
+  podcast_series_only: true       # RA Exchange, RA.886 etc — high quality
+  max_per_run: 200
+  requests_per_second: 0.5
+  date_from: "2018-01-01"
+
+# ─── Global settings ──────────────────────────────────────────────────────────
+global:
+  # GCS bucket for raw response backups before parsing
+  # Set to empty string to disable raw backup
+  raw_backup_bucket: ""           # filled at runtime from GCS_BUCKET env var
+
+  # Track deduplication: how to generate track_id when no MusicBrainz ID
+  # "hash" = md5(lowercase(artist) + "|" + lowercase(title))
+  track_id_strategy: "hash"
+
+  # Minimum confidence to accept a tracklist parse
+  # (ratio of lines that look like "Artist - Title")
+  min_parse_confidence: 0.4
+
+  # Log level: DEBUG | INFO | WARNING | ERROR
+  log_level: "INFO"
