@@ -7,7 +7,7 @@ terraform {
   }
   # Store state in GCS so the team can share it
   backend "gcs" {
-    bucket = "mixscope-terraform-state"
+    bucket = "mixscope-terraform-state-mixsource"
     prefix = "terraform/state"
   }
 }
