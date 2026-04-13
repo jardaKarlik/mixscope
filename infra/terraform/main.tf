@@ -298,7 +298,7 @@ resource "google_cloud_scheduler_job" "scraper_schedules" {
   name     = "trigger-mixscope-scraper-${each.key}"
   schedule = each.value.schedule
   region   = var.region
-  timezone = "Europe/Prague"
+  time_zone = "Europe/Prague"
 
   http_target {
     http_method = "POST"
