@@ -45,15 +45,18 @@ class MixcloudScraper(BaseScraper):
 
     def _search_mixes(self, tag: str, limit: int = 100) -> list[dict]:
         """
-        Return up to `limit` cloudcast objects for a genre tag,
+        Return up to `limit` cloudcast objects for a genre category,
         ordered by most recent first.
+
+        Uses /categories/{slug}/cloudcasts/ — the /tag/ endpoint was
+        removed by Mixcloud in 2024.
         """
         mixes  = []
         offset = 0
 
         while len(mixes) < limit:
             batch_size = min(50, limit - len(mixes))
-            data = self._api_get(f"/tag/{tag}/cloudcasts/", params={
+            data = self._api_get(f"/categories/{tag}/cloudcasts/", params={
                 "limit":  batch_size,
                 "offset": offset,
                 "order":  "latest",
@@ -122,7 +125,7 @@ class MixcloudScraper(BaseScraper):
                 log.info(f"Reached max_per_run={max_sets} — stopping.")
                 break
 
-            log.info(f"Searching tag: '{tag}' …")
+            log.info(f"Searching category: '{tag}' …")
             try:
                 mixes = self._search_mixes(tag, limit=100)
             except Exception as exc:
