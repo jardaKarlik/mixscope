@@ -352,12 +352,11 @@ class SoundCloudScraper(BaseScraper):
                 for t in raw_tracks:
                     tid = make_track_id(t["artist"], t["title"])
                     db_tracks.append({
-                        "track_id":  tid,
-                        "title":     t["title"],
-                        "artist":    t["artist"],
-                        "genre":     genre or None,
+                        **t,                          # carries position + start_time
+                        "track_id":    tid,
+                        "genre":       genre or None,
                         "lastfm_tags": tags_clean,
-                        "source":    "soundcloud",
+                        "source":      "soundcloud",
                     })
 
                 transitions = tracks_to_transitions(
