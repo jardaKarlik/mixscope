@@ -79,7 +79,7 @@ def run(source: str):
 
     try:
         if source == "spotify":
-            from sources.spotify import SpotifyScraper
+            from spotify import SpotifyScraper
             scraper = SpotifyScraper(config, gcs_client, bucket)
             result  = scraper.run()
             stats["tracks"]     = result.get("tracks", 0)
@@ -87,7 +87,7 @@ def run(source: str):
             stats["errors"]     = result.get("errors", 0)
 
         elif source == "youtube":
-            from sources.youtube import YouTubeScraper
+            from youtube import YouTubeScraper
             scraper = YouTubeScraper(config, gcs_client, bucket)
             result  = scraper.run()
             stats["tracks"]      = result.get("tracks", 0)
@@ -95,26 +95,36 @@ def run(source: str):
             stats["errors"]      = result.get("errors", 0)
 
         elif source == "mixcloud":
-            from sources.mixcloud import MixcloudScraper
+            from mixcloud import MixcloudScraper
             scraper = MixcloudScraper(config, gcs_client, bucket)
             result  = scraper.run()
             stats["tracks"]      = result.get("tracks", 0)
             stats["transitions"] = result.get("transitions", 0)
             stats["errors"]      = result.get("errors", 0)
 
-        elif source == "onzerotracklists":
-            from sources.one001tracklists import OneZeroZeroOneTracklists
-            scraper = OneZeroZeroOneTracklists(config, gcs_client, bucket)
+        elif source == "tracklists_1001":
+            from tracklists_1001 import Tracklists1001Scraper
+            scraper = Tracklists1001Scraper(config, gcs_client, bucket)
             result  = scraper.run()
             stats["tracks"]      = result.get("tracks", 0)
             stats["transitions"] = result.get("transitions", 0)
             stats["errors"]      = result.get("errors", 0)
 
         elif source == "soundcloud":
-            log.info("SoundCloud scraper: enable in scraper_config.yaml once credentials are ready.")
+            from soundcloud import SoundCloudScraper
+            scraper = SoundCloudScraper(config, gcs_client, bucket)
+            result  = scraper.run()
+            stats["tracks"]      = result.get("tracks", 0)
+            stats["transitions"] = result.get("transitions", 0)
+            stats["errors"]      = result.get("errors", 0)
 
         elif source == "residentadvisor":
-            log.info("Resident Advisor scraper: coming soon.")
+            from resident_advisor import ResidentAdvisorScraper
+            scraper = ResidentAdvisorScraper(config, gcs_client, bucket)
+            result  = scraper.run()
+            stats["tracks"]      = result.get("tracks", 0)
+            stats["transitions"] = result.get("transitions", 0)
+            stats["errors"]      = result.get("errors", 0)
 
         else:
             log.error(f"Unknown source: '{source}'")

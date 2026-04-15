@@ -1,6 +1,6 @@
 """
-scrapers/sources/one001tracklists.py
-=====================================
+scrapers/tracklists_1001.py
+============================
 HTML scraper for 1001Tracklists.com — the highest quality transition source.
 Structured tracklist data, professionally maintained.
 
@@ -11,18 +11,19 @@ Flow:
   1. Browse genre pages for recent tracklists
   2. For each tracklist page: parse structured track listings
   3. Write sets + transitions to DB
+
+Requires: no API key — public site
 """
 
-import time
-import json
-import logging
-import re
 import hashlib
+import logging
 from datetime import datetime
 from typing import Optional
+
 import requests
 from bs4 import BeautifulSoup
 
+from base import BaseScraper
 from utils.db import upsert_tracks, upsert_set, insert_transitions
 from utils.tracklist_parser import make_track_id, tracks_to_transitions
 
@@ -31,31 +32,46 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://www.1001tracklists.com"
 
 
-class OneZeroZeroOneTracklists:
+class Tracklists1001Scraper(BaseScraper):
+    """
+    Scrapes DJ set tracklists from 1001Tracklists.com by genre.
+
+    Config keys (scraper_config.yaml → tracklists_1001 section):
+        genres                  list[str]   genre slugs to browse
+        min_tracklist_length    int         skip sets below this track count (default 10)
+        max_per_run             int         hard cap on sets stored per run (default 500)
+        requests_per_second     float       rate limit — keep ≤ 0.5 (default 0.5)
+    """
+
+    SOURCE = "1001tracklists"
+
     def __init__(self, config: dict, gcs_client=None, bucket_name: str = None):
-        self.config      = config
-        self.gcs_client  = gcs_client
-        self.bucket_name = bucket_name
-        self.session     = requests.Session()
-        self.session.headers.update({
+        super().__init__(config, gcs_client, bucket_name)
+        self._session = requests.Session()
+        self._session.headers.update({
             "User-Agent": "MixscopeBot/1.0 (DJ mix research; github.com/JardaKarlik/mixscope)"
         })
 
-    def _get(self, url: str) -> Optional[BeautifulSoup]:
-        delay = 1.0 / self.config.get("requests_per_second", 0.5)
-        time.sleep(delay)
+    # ── HTML helpers (site-specific — don't use the JSON _get from base) ────
+
+    def _html_get(self, url: str) -> Optional[BeautifulSoup]:
+        """Rate-limited HTML GET. Returns BeautifulSoup or None on error."""
+        import time
+        time.sleep(1.0 / max(self._rps, 0.01))
         try:
-            resp = self.session.get(url, timeout=15)
+            resp = self._session.get(url, timeout=15)
             resp.raise_for_status()
             return BeautifulSoup(resp.text, "html.parser")
-        except Exception as e:
-            log.error(f"GET failed {url}: {e}")
+        except Exception as exc:
+            log.error(f"GET failed {url}: {exc}")
             return None
 
+    # ── Scraping logic ───────────────────────────────────────────────────────
+
     def _get_tracklist_urls(self, genre: str, page: int = 1) -> list[str]:
-        """Get tracklist URLs from a genre listing page."""
+        """Return tracklist URLs from a genre listing page."""
         url  = f"{BASE_URL}/genre/{genre}/page/{page}/"
-        soup = self._get(url)
+        soup = self._html_get(url)
         if not soup:
             return []
         links = soup.select("a[href*='/tracklist/']")
@@ -64,18 +80,18 @@ class OneZeroZeroOneTracklists:
     def _parse_tracklist_page(self, url: str) -> Optional[dict]:
         """
         Parse a single tracklist page.
-        Returns dict with set metadata and ordered tracks.
+        Returns dict with set metadata + ordered tracks, or None if unusable.
         """
-        soup = self._get(url)
+        soup = self._html_get(url)
         if not soup:
             return None
 
-        # Extract set title and DJ
+        # Set title
         title_el = soup.select_one("h1.tlTitle, h1.title")
         title    = title_el.get_text(strip=True) if title_el else ""
 
-        # Extract date
-        date_el = soup.select_one("[class*='date'], time[datetime]")
+        # Set date
+        date_el  = soup.select_one("[class*='date'], time[datetime]")
         set_date = None
         if date_el:
             dt_str = date_el.get("datetime") or date_el.get_text(strip=True)
@@ -86,39 +102,55 @@ class OneZeroZeroOneTracklists:
                 except Exception:
                     pass
 
-        # Extract tracks — 1001TL uses structured markup
-        tracks  = []
+        # Tracks — 1001TL uses structured markup
+        tracks      = []
         track_items = soup.select(".tlpItemContainer, .tlpItem, [class*='trackItem']")
         for i, item in enumerate(track_items):
             artist_el = item.select_one(".tlpArtist, .artistName, [class*='artist']")
-            title_el  = item.select_one(".tlpTitle, .trackTitle, [class*='title']")
-            if not artist_el or not title_el:
+            ttitle_el = item.select_one(".tlpTitle, .trackTitle, [class*='title']")
+            if not artist_el or not ttitle_el:
                 continue
             artist = artist_el.get_text(strip=True)
-            title  = title_el.get_text(strip=True)
-            if artist and title:
-                tracks.append({"artist": artist, "title": title, "position": i})
+            ttitle = ttitle_el.get_text(strip=True)
+            if artist and ttitle:
+                tracks.append({"artist": artist, "title": ttitle, "position": i})
 
-        if len(tracks) < self.config.get("min_tracklist_length", 10):
+        min_len = self.config.get("min_tracklist_length", 10)
+        if len(tracks) < min_len:
+            log.debug(f"  Skip short tracklist '{title}' ({len(tracks)} tracks < {min_len})")
             return None
 
         return {"title": title, "set_date": set_date, "url": url, "tracks": tracks}
 
+    # ── Main run ─────────────────────────────────────────────────────────────
+
     def run(self) -> dict:
         stats   = {"sets": 0, "tracks": 0, "transitions": 0, "errors": 0}
         max_run = self.config.get("max_per_run", 500)
+        genres  = self.config.get("genres", ["techno"])
 
-        for genre in self.config.get("genres", ["techno"]):
+        log.info(
+            f"1001Tracklists scraper starting — "
+            f"{len(genres)} genre(s), max_per_run={max_run}"
+        )
+
+        for genre in genres:
             if stats["sets"] >= max_run:
+                log.info(f"Reached max_per_run={max_run} — stopping.")
                 break
-            log.info(f"1001Tracklists scanning genre: {genre}")
+
+            log.info(f"Scanning genre: '{genre}' …")
 
             for page in range(1, 10):
                 if stats["sets"] >= max_run:
                     break
+
                 urls = self._get_tracklist_urls(genre, page)
                 if not urls:
+                    log.debug(f"  No URLs on page {page} for '{genre}' — done with genre.")
                     break
+
+                log.info(f"  Page {page}: {len(urls)} tracklist URLs")
 
                 for url in urls:
                     if stats["sets"] >= max_run:
@@ -128,15 +160,26 @@ class OneZeroZeroOneTracklists:
                         if not result:
                             continue
 
-                        set_id   = "ot_" + hashlib.md5(url.encode()).hexdigest()[:12]
+                        set_id    = "ot_" + hashlib.md5(url.encode()).hexdigest()[:12]
                         db_tracks = []
                         for t in result["tracks"]:
                             track_id = make_track_id(t["artist"], t["title"])
-                            db_tracks.append({**t, "track_id": track_id, "source": "1001tracklists"})
+                            db_tracks.append({
+                                **t,
+                                "track_id": track_id,
+                                "source":   "1001tracklists",
+                            })
 
                         transitions = tracks_to_transitions(
                             db_tracks, set_id, result["set_date"], "1001tracklists"
                         )
+
+                        self._backup_to_gcs(set_id, {
+                            "url":    url,
+                            "title":  result["title"],
+                            "tracks": result["tracks"],
+                        })
+
                         upsert_tracks(db_tracks)
                         is_new = upsert_set({
                             "set_id":     set_id,
@@ -152,10 +195,21 @@ class OneZeroZeroOneTracklists:
                             stats["sets"]        += 1
                             stats["tracks"]      += len(db_tracks)
                             stats["transitions"] += len(transitions)
-                            log.info(f"  ✓ {result['title'][:50]} — {len(db_tracks)} tracks")
+                            log.info(
+                                f"  ✓ {result['title'][:60]} — "
+                                f"{len(db_tracks)} tracks, "
+                                f"{len(transitions)} transitions"
+                            )
+                        else:
+                            log.debug(f"  Already in DB: '{result['title']}'")
 
-                    except Exception as e:
-                        log.error(f"Error processing {url}: {e}")
+                    except Exception as exc:
+                        log.error(f"Error processing {url}: {exc}")
                         stats["errors"] += 1
 
+        log.info(
+            f"1001Tracklists done — "
+            f"sets={stats['sets']}, tracks={stats['tracks']}, "
+            f"transitions={stats['transitions']}, errors={stats['errors']}"
+        )
         return stats

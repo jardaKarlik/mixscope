@@ -60,7 +60,7 @@ mixcloud:
     - "minimal"
     - "deep-house"
     - "tech-house"
-  max_per_run: 500
+  max_per_run: 10                 # TEST RUN — raise to 500 for production
   requests_per_second: 2
 
 soundcloud:
@@ -75,7 +75,7 @@ soundcloud:
   max_per_run: 300
   requests_per_second: 2
 
-one001tracklists:
+tracklists_1001:
   enabled: true
   # HTML scraping — no API, be polite with rate limits
   max_per_run: 500
