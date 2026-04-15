@@ -3,12 +3,20 @@ scrapers/mixcloud.py
 ====================
 Collects DJ set tracklists from the Mixcloud API.
 
-Mixcloud is the cleanest source — tracklists are structured data,
-not free-text descriptions, so no parsing is needed.
+Tracklist strategy (two-tier):
+  1. Structured sections via GET /cloudcast/{key} — the `sections` field
+     was available publicly until ~2022; Mixcloud now requires OAuth for the
+     standalone /sections/ endpoint and returns empty [] without auth.
+  2. Description parsing fallback — many DJs paste tracklists in the
+     description field. Handled via utils.tracklist_parser.
 
 API:  https://www.mixcloud.com/developers/
-Auth: none required for public read-only data
+Auth: none required for public read-only data (sections require OAuth)
 Rate: 1 000 req/hour  →  keep requests_per_second ≤ 2 in config
+
+Valid category slugs (from GET /categories/):
+  techno, house, deep-house, tech-house, electronica, drum-bass,
+  trance, ambient, minimal (not a Mixcloud category — skip)
 """
 
 import logging
@@ -16,7 +24,7 @@ from datetime import datetime
 
 from base import BaseScraper
 from utils.db import upsert_tracks, upsert_set, insert_transitions
-from utils.tracklist_parser import make_track_id, tracks_to_transitions
+from utils.tracklist_parser import make_track_id, tracks_to_transitions, parse_tracklist
 
 log = logging.getLogger(__name__)
 
@@ -25,14 +33,14 @@ MIXCLOUD_API = "https://api.mixcloud.com"
 
 class MixcloudScraper(BaseScraper):
     """
-    Scrapes DJ mix tracklists from Mixcloud by genre tag.
+    Scrapes DJ mix tracklists from Mixcloud by genre category.
 
     Config keys (from scraper_config.yaml → mixcloud section):
-        genres              list[str]   genre tags to search
-        min_play_count      int         skip mixes below this threshold
-        min_duration_minutes int        skip mixes shorter than this (default 45)
-        max_per_run         int         hard cap on sets stored per run
-        requests_per_second float       rate limit (default 2)
+        genres               list[str]   Mixcloud category slugs (see /categories/)
+        min_play_count       int         skip mixes below this threshold (default 2000)
+        min_duration_minutes int         skip mixes shorter than this (default 45)
+        max_per_run          int         hard cap on sets stored per run (default 500)
+        requests_per_second  float       rate limit — keep ≤ 2 (default 2)
     """
 
     SOURCE = "mixcloud"
@@ -43,9 +51,9 @@ class MixcloudScraper(BaseScraper):
         """GET against the Mixcloud API base URL."""
         return self._get(f"{MIXCLOUD_API}{path}", params=params)
 
-    def _search_mixes(self, tag: str, limit: int = 100) -> list[dict]:
+    def _search_mixes(self, category: str, limit: int = 100) -> list[dict]:
         """
-        Return up to `limit` cloudcast objects for a genre category,
+        Return up to `limit` cloudcast summary objects for a genre category,
         ordered by most recent first.
 
         Uses /categories/{slug}/cloudcasts/ — the /tag/ endpoint was
@@ -56,7 +64,7 @@ class MixcloudScraper(BaseScraper):
 
         while len(mixes) < limit:
             batch_size = min(50, limit - len(mixes))
-            data = self._api_get(f"/categories/{tag}/cloudcasts/", params={
+            data = self._api_get(f"/categories/{category}/cloudcasts/", params={
                 "limit":  batch_size,
                 "offset": offset,
                 "order":  "latest",
@@ -66,33 +74,40 @@ class MixcloudScraper(BaseScraper):
                 break
             mixes.extend(items)
             offset += len(items)
-            # Stop if Mixcloud signals no more pages
             if len(items) < batch_size or not data.get("paging", {}).get("next"):
                 break
 
         return mixes
 
-    def _get_tracklist(self, cloudcast_key: str) -> list[dict]:
+    def _get_cloudcast_detail(self, cloudcast_key: str) -> dict:
         """
-        Fetch structured tracklist for a mix via the /sections/ endpoint.
-
-        Returns list of dicts:
-            artist     str
-            title      str
-            position   int   (0-based index in set)
-            start_time int   (seconds from mix start)
-
-        Returns [] on any error — caller skips mixes with < 5 tracks.
+        Fetch full cloudcast detail including description.
+        Returns raw API dict or {} on error.
         """
         try:
-            data = self._api_get(f"{cloudcast_key}sections/", params={"limit": 100})
+            return self._api_get(cloudcast_key)
         except Exception as exc:
-            log.debug(f"Tracklist fetch failed for {cloudcast_key}: {exc}")
-            return []
+            log.debug(f"Cloudcast detail fetch failed for {cloudcast_key}: {exc}")
+            return {}
 
+    def _extract_tracklist(self, detail: dict) -> list[dict]:
+        """
+        Extract tracklist from a full cloudcast detail response.
+
+        Strategy:
+          1. `sections` field (empty without OAuth — future-proofed for when
+             Mixcloud grants API access or OAuth is implemented).
+          2. Description parsing via tracklist_parser (works for DJs that
+             embed tracklists in the description text).
+
+        Returns list of dicts with: artist, title, position, start_time.
+        Returns [] if no usable tracklist found.
+        """
         tracks = []
-        for i, section in enumerate(data.get("data", [])):
-            track = section.get("track") or {}
+
+        # ── Tier 1: structured sections (requires OAuth; always [] currently) ──
+        for i, section in enumerate(detail.get("sections", [])):
+            track  = section.get("track") or {}
             artist = (track.get("artist") or {}).get("name", "").strip()
             title  = (track.get("name") or "").strip()
             if artist and title:
@@ -102,6 +117,24 @@ class MixcloudScraper(BaseScraper):
                     "position":   i,
                     "start_time": section.get("start_time", 0),
                 })
+
+        if tracks:
+            log.debug(f"  Sections API returned {len(tracks)} tracks")
+            return tracks
+
+        # ── Tier 2: description parsing ──────────────────────────────────────
+        description = detail.get("description", "")
+        if description:
+            parsed = parse_tracklist(description)
+            for i, t in enumerate(parsed):
+                tracks.append({
+                    "artist":     t.get("artist", ""),
+                    "title":      t.get("title", ""),
+                    "position":   i,
+                    "start_time": 0,
+                })
+            if tracks:
+                log.debug(f"  Description parsing returned {len(tracks)} tracks")
 
         return tracks
 
@@ -120,20 +153,20 @@ class MixcloudScraper(BaseScraper):
             f"min_plays={min_plays}, min_dur={min_dur_s // 60}min"
         )
 
-        for tag in genres:
+        for category in genres:
             if stats["sets"] >= max_sets:
                 log.info(f"Reached max_per_run={max_sets} — stopping.")
                 break
 
-            log.info(f"Searching category: '{tag}' …")
+            log.info(f"Searching category: '{category}' …")
             try:
-                mixes = self._search_mixes(tag, limit=100)
+                mixes = self._search_mixes(category, limit=100)
             except Exception as exc:
-                log.error(f"Search failed for tag '{tag}': {exc}")
+                log.error(f"Search failed for category '{category}': {exc}")
                 stats["errors"] += 1
                 continue
 
-            log.info(f"  Found {len(mixes)} candidate mixes for '{tag}'")
+            log.info(f"  Found {len(mixes)} candidate mixes for '{category}'")
 
             for mix in mixes:
                 if stats["sets"] >= max_sets:
@@ -157,9 +190,14 @@ class MixcloudScraper(BaseScraper):
 
                 # ── Fetch tracklist ──────────────────────────────────────────
                 try:
-                    raw_tracks = self._get_tracklist(key)
+                    detail     = self._get_cloudcast_detail(key)
+                    raw_tracks = self._extract_tracklist(detail)
+
                     if len(raw_tracks) < 5:
-                        log.debug(f"  Skip mix with too few tracks '{name}' ({len(raw_tracks)})")
+                        log.debug(
+                            f"  Skip mix with too few tracks '{name}' "
+                            f"({len(raw_tracks)})"
+                        )
                         continue
 
                     # Parse set date
@@ -185,7 +223,11 @@ class MixcloudScraper(BaseScraper):
                     transitions = tracks_to_transitions(db_tracks, set_id, set_date, "mixcloud")
 
                     # ── GCS backup ───────────────────────────────────────────
-                    self._backup_to_gcs(set_id, {"mix": mix, "tracks": raw_tracks})
+                    self._backup_to_gcs(set_id, {
+                        "mix":    mix,
+                        "detail": detail,
+                        "tracks": raw_tracks,
+                    })
 
                     # ── Write to DB ──────────────────────────────────────────
                     upsert_tracks(db_tracks)
