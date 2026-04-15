@@ -68,16 +68,18 @@ soundcloud:
   # client_id is extracted dynamically from SoundCloud's JS bundle.
   # Optionally cache it in Secret Manager as 'mixscope-soundcloud-client-id'
   # to avoid the JS fetch overhead on every run.
-  min_play_count: 1000            # TEST RUN — raise to 5000 for production
+  min_play_count: 5000
   min_duration_minutes: 45        # DJ sets are long
-  # Search queries — genre + "tracklist" filters to descriptions that have one
+  # Search queries — genre + "tracklist" biases toward descriptions that have one
   search_queries:
     - "techno dj set tracklist"
     - "house dj set tracklist"
     - "minimal techno dj set tracklist"
     - "deep house dj set tracklist"
     - "tech house dj set tracklist"
-  max_per_run: 10                 # TEST RUN — raise to 300 for production
+    - "afro house dj set tracklist"
+    - "melodic techno dj set tracklist"
+  max_per_run: 300
   requests_per_second: 2          # empirically safe; SC doesn't publish limits
 
 tracklists_1001:
