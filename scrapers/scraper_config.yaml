@@ -97,10 +97,13 @@ tracklists_1001:
 
 resident_advisor:
   enabled: true
-  podcast_series_only: true       # RA Exchange, RA.886 etc — high quality
-  max_per_run: 200
-  requests_per_second: 0.5
-  date_from: "2018-01-01"
+  # GraphQL API: ra.co/graphql — no auth required
+  # Episodes fetched by walking backward from latest ID via podcast(id: X)
+  date_from: "2020-01-01"        # don't go further back than this
+  max_per_run: 10                 # TEST RUN — raise to 200 for production
+  min_tracklist_length: 5         # skip episodes with fewer parsed tracks
+  stop_on_known: true             # stop early on subsequent runs once caught up
+  requests_per_second: 1          # 1 req/s is empirically safe
 
 # ─── Global settings ──────────────────────────────────────────────────────────
 global:
