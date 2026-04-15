@@ -4,7 +4,19 @@
       "Bash(gh repo:*)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(gcloud run:*)",
+      "Bash(gcloud logging:*)",
+      "Bash(docker --version)",
+      "Bash(gcloud auth:*)",
+      "Bash(docker.exe --version)",
+      "Bash(\"/c/Program Files/Docker/Docker/resources/bin/docker\" --version)",
+      "Read(//c/_dev/mixscope_ml/**)",
+      "Bash(gcloud builds:*)",
+      "Bash(gcloud projects:*)",
+      "Bash(gcloud artifacts:*)",
+      "Bash(git config:*)",
+      "Read(//c/Users/jaros/**)"
     ]
   }
 }

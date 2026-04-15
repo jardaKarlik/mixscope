@@ -72,7 +72,9 @@ class SpotifyScraper:
             time.sleep(retry_after)
             return self._get(url, params)
 
-        resp.raise_for_status()
+        if not resp.ok:
+            log.error(f"Spotify API {resp.status_code} for {resp.url} — body: {resp.text[:500]}")
+            resp.raise_for_status()
         return resp.json()
 
     def _search_playlists(self, query: str, limit: int = 50) -> list[dict]:
@@ -83,29 +85,53 @@ class SpotifyScraper:
             data = self._get(f"{SPOTIFY_API_BASE}/search", params={
                 "q":      query,
                 "type":   "playlist",
-                "limit":  min(50, limit - len(results)),
+                "limit":  min(10, limit - len(results)),  # Spotify dev-mode cap ~10
                 "offset": offset,
                 "market": "US",
             })
             items = data.get("playlists", {}).get("items", [])
             if not items:
                 break
-            results.extend([i for i in items if i])  # filter None entries
-            offset += len(items)
+            valid = [i for i in items if i]
+            results.extend(valid)
+            offset += len(items)  # Spotify paginates by raw page size, not filtered count
             if len(items) < 50:
                 break
         return results
 
     def _get_playlist_tracks(self, playlist_id: str) -> list[dict]:
-        """Fetch all tracks in a playlist (handles pagination)."""
-        tracks = []
-        url    = f"{SPOTIFY_API_BASE}/playlists/{playlist_id}/tracks"
-        params = {"limit": 100, "fields": "items(track(id,name,artists,album)),next"}
+        """Fetch tracks in a playlist.
 
+        First tries GET /playlists/{id} which returns the first 100 tracks inline
+        (works with Client Credentials on unreviewed apps). Falls back to the
+        paginated /tracks endpoint which requires Extended Quota Mode approval.
+        """
+        tracks = []
+
+        # Try the full playlist endpoint — returns tracks.items inline
+        data = self._get(f"{SPOTIFY_API_BASE}/playlists/{playlist_id}")
+
+        track_page = data.get("tracks", {})
+        items = track_page.get("items", [])
+        log.info(f"[DEBUG] Playlist {playlist_id}: response keys={list(data.keys())}, tracks={data.get('tracks', 'MISSING')!r:.200}")
+
+        for item in items:
+            track = item.get("track")
+            if not track or not track.get("id"):
+                continue
+            artist = ", ".join(a["name"] for a in track.get("artists", []))
+            tracks.append({
+                "spotify_id": track["id"],
+                "title":      track["name"],
+                "artist":     artist,
+            })
+
+        # Paginate if there are more tracks and a next link is available
+        url    = track_page.get("next")
+        params = {}
         while url:
-            data  = self._get(url, params=params)
-            items = data.get("items", [])
-            for item in items:
+            page  = self._get(url, params=params)
+            for item in page.get("items", []):
                 track = item.get("track")
                 if not track or not track.get("id"):
                     continue
@@ -115,8 +141,7 @@ class SpotifyScraper:
                     "title":      track["name"],
                     "artist":     artist,
                 })
-            url    = data.get("next")
-            params = {}  # next URL has params embedded
+            url = page.get("next")
 
         return tracks
 
@@ -146,10 +171,16 @@ class SpotifyScraper:
                     continue
                 seen_playlist_ids.add(pl_id)
 
-                followers = pl.get("followers", {}).get("total", 0) if pl.get("followers") else 0
-                if followers < min_followers:
-                    log.debug(f"Skipping low-follower playlist {pl_id} ({followers})")
-                    continue
+                # Search results don't include followers; only GET /playlists/{id} does.
+                # Only apply the filter when the field is actually present.
+                followers_data = pl.get("followers")
+                if followers_data is not None:
+                    followers = followers_data.get("total", 0)
+                    if followers < min_followers:
+                        log.debug(f"Skipping low-follower playlist {pl_id} ({followers})")
+                        continue
+                else:
+                    followers = 0  # unknown — accept and store
 
                 try:
                     tracks = self._get_playlist_tracks(pl_id)

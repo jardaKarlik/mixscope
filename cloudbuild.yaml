@@ -1,0 +1,11 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -f
+      - infra/docker/Dockerfile.scraper
+      - -t
+      - europe-west1-docker.pkg.dev/$PROJECT_ID/mixscope-scrapers/scraper:latest
+      - .
+images:
+  - europe-west1-docker.pkg.dev/$PROJECT_ID/mixscope-scrapers/scraper:latest
