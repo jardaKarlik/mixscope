@@ -102,7 +102,7 @@ def run(source: str):
             stats["transitions"] = result.get("transitions", 0)
             stats["errors"]      = result.get("errors", 0)
 
-        elif source == "tracklists_1001":
+        elif source == "onzerotracklists":
             from tracklists_1001 import Tracklists1001Scraper
             scraper = Tracklists1001Scraper(config, gcs_client, bucket)
             result  = scraper.run()

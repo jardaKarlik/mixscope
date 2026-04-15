@@ -255,7 +255,7 @@ class ResidentAdvisorScraper(BaseScraper):
         duration_s = _parse_duration_s(dur_str)
         set_id     = f"ra_{ep_id}"
 
-        # Build DB objects
+        # Build DB objects — assign track_ids first (needed for transitions)
         db_tracks = []
         for t in raw_tracks:
             track_id = make_track_id(t["artist"], t["title"])
@@ -267,6 +267,17 @@ class ResidentAdvisorScraper(BaseScraper):
 
         transitions = tracks_to_transitions(db_tracks, set_id, set_date, "residentadvisor")
 
+        # Deduplicate by track_id before upsert — the same track can appear
+        # multiple times in a set (two plays of the same record). PostgreSQL
+        # raises "cannot affect row a second time" if duplicates are in one
+        # execute_values batch with ON CONFLICT DO UPDATE.
+        seen: set[str] = set()
+        unique_tracks  = []
+        for t in db_tracks:
+            if t["track_id"] not in seen:
+                seen.add(t["track_id"])
+                unique_tracks.append(t)
+
         # GCS backup
         self._backup_to_gcs(set_id, {
             "episode":   ep,
@@ -274,7 +285,7 @@ class ResidentAdvisorScraper(BaseScraper):
         })
 
         try:
-            upsert_tracks(db_tracks)
+            upsert_tracks(unique_tracks)
             is_new = upsert_set({
                 "set_id":     set_id,
                 "title":      title,

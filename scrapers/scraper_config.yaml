@@ -82,7 +82,7 @@ soundcloud:
   max_per_run: 300
   requests_per_second: 2          # empirically safe; SC doesn't publish limits
 
-tracklists_1001:
+onzerotracklists:
   enabled: true
   # HTML scraping — no API, be polite with rate limits
   max_per_run: 500
@@ -95,7 +95,7 @@ tracklists_1001:
     - "electro"
     - "minimal"
 
-resident_advisor:
+residentadvisor:
   enabled: true
   # GraphQL API: ra.co/graphql — no auth required
   # Episodes fetched by walking backward from latest ID via podcast(id: X)
