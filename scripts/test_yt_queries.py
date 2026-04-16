@@ -51,7 +51,8 @@ def get_api_key() -> str:
     result = subprocess.run(
         ["gcloud", "secrets", "versions", "access", "latest",
          f"--secret={SECRET_NAME}", f"--project={GCP_PROJECT}"],
-        capture_output=True, text=True
+        capture_output=True, text=True,
+        shell=(sys.platform == "win32"),  # needed on Windows where gcloud is a .cmd
     )
     if result.returncode != 0:
         raise RuntimeError(f"gcloud error: {result.stderr.strip()}")
