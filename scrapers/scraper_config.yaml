@@ -28,11 +28,11 @@ youtube:
   enabled: true
   # YouTube Data API v3 quota: 10,000 units/day free
   # search.list = 100 units, videos.list = 1 unit
-  # At 5000 units/run we can do ~45 searches + 4500 video lookups
+  # At 5000 units/run: ~4 channel searches + ~45 query searches + video detail lookups
   quota_per_run: 5000
   min_video_duration_minutes: 45  # DJ sets are long — ignore short clips
-  min_views: 5000
-  # Channel whitelist — trusted DJ set channels only (avoids wasting quota)
+  min_views: 100                  # Low threshold: freetekno content has niche view counts
+  # Channel whitelist — source_quality=1 (high trust). @handles resolved at runtime.
   channel_whitelist:
     - UCGmHkBFCDCYqnVhIXkMOpYg    # Boiler Room
     - UCXIyz409s7bNWVcM-vjfdVA    # NTS Radio
@@ -41,12 +41,28 @@ youtube:
     - UCnbABMEFSIFR0xekOs0pMpw    # fabric London
     - UCZ3KJdCer7oObmPmvGEFUCg    # Dekmantel
     - UCM5HMnMKNiP-0PnWaKnMdpA    # Tresor Berlin
-  # Also search for sets outside whitelist, but consume quota carefully
+    - "@PulseDrumantek"            # raggatek specialist
+    - "@P4Kid3RM"                  # freetekno/tribe
+  # Search queries for non-whitelist discovery.
+  # source_quality=2 if tracklist found in description, else source_quality=3.
+  # Evaluated Apr 2026: removed "acid tekno" (drifts to club scene),
+  # removed "tribal tekno" (pulls tribal house), changed raggajungle query.
   search_queries:
-    - "techno DJ set tracklist 2023"
-    - "house DJ live set tracklist"
-    - "electronic mix tracklist description"
-  date_from: "2019-01-01"
+    - "freetekno DJ set tracklist"
+    - "raggatek mix tracklist"
+    - "teknival set tracklist"
+    - "son de teuf DJ set"
+    - "free party tekno set tracklist"
+    - "hardtek DJ set tracklist"
+    - "raggajungle tekno mix tracklist"
+  # Skip videos whose title contains any of these (case-insensitive).
+  # Prevents mainstream hard techno compilations and venue-branded content.
+  title_exclude_keywords:
+    - "hard techno"
+    - "tribal house"
+    - "warehouse"
+    - "boiler room"
+  date_from: null                 # No date filter — capture older sets too
   requests_per_second: 1          # YouTube API is strict on rate limits
 
 mixcloud:

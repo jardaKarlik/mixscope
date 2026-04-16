@@ -5,7 +5,7 @@ Builds the feature vector for each (track_a, track_b) pair.
 Each signal is computed independently, then weighted by config.FEATURE_WEIGHTS,
 then assembled into a single numpy array for model input.
 
-Feature vector layout (8 dimensions):
+Feature vector layout (9 dimensions):
   [0] corpus_transition_freq    — how often A→B in DJ sets
   [1] bpm_proximity             — BPM closeness score (0-1)
   [2] key_harmony               — Camelot wheel score (0-1)
@@ -14,6 +14,9 @@ Feature vector layout (8 dimensions):
   [5] energy_curve_similarity   — beat curve shape match
   [6] label_overlap             — same record label flag
   [7] artist_similarity         — Last.fm artist similarity
+  [8] source_quality_score      — best observed data quality for this pair (0-1)
+                                   1.0=whitelist  0.5=search+tracklist  0.0=search+no-tl
+                                   Built from source_quality_corpus at prepare_data time.
 """
 
 import numpy as np
@@ -136,11 +139,15 @@ class FeatureBuilder:
         track_metadata: pd.DataFrame,  # track_id, bpm, key, genre, label, artist_sim_score
         max_corpus_count: float = None,
         max_playlist_count: float = None,
+        source_quality_corpus: Dict = None,  # {(track_a_id, track_b_id): best_quality (1-3)}
     ):
         self.corpus   = corpus_counts
         self.playlist = playlist_matrix
         self.meta     = track_metadata.set_index("track_id") if "track_id" in track_metadata.columns else track_metadata
         self.weights  = config.FEATURE_WEIGHTS
+        # Maps pair → best (lowest) source_quality seen across all training sets.
+        # 1=whitelist, 2=search+tl, 3=search+no-tl. Default 2 if pair is unseen.
+        self.sq_corpus = source_quality_corpus or {}
 
         # Normalisation denominators (fit on training data only — no leakage)
         self.max_corpus   = max_corpus_count   or max(corpus_counts.values(),  default=1)
@@ -154,7 +161,7 @@ class FeatureBuilder:
 
     def build(self, track_a_id: str, track_b_id: str) -> np.ndarray:
         """
-        Returns weighted feature vector of shape (8,).
+        Returns weighted feature vector of shape (9,).
         Apply StandardScaler AFTER building the full dataset — not here.
         """
         # ── Raw feature values ─────────────────────────────────────────────────
@@ -211,6 +218,16 @@ class FeatureBuilder:
             artist_sim = 0.9 if artist_a and artist_a == artist_b else 0.3
         artist_feat = float(artist_sim)
 
+        # [8] Source quality score for this pair
+        # Best (minimum) source_quality seen for (A→B) in training corpus.
+        # Normalized: quality 1 → 1.0 (high trust), 2 → 0.5, 3 → 0.0 (low trust)
+        # Default 2 (0.5) for unseen pairs — neutral, neither rewarded nor penalised.
+        best_quality = min(
+            self.sq_corpus.get((track_a_id, track_b_id), 2),
+            self.sq_corpus.get((track_b_id, track_a_id), 2),
+        )
+        sq_feat = (3 - best_quality) / 2.0  # maps 1→1.0, 2→0.5, 3→0.0
+
         # ── Raw feature vector ─────────────────────────────────────────────────
         raw = np.array([
             corpus_feat,    # [0]
@@ -221,6 +238,7 @@ class FeatureBuilder:
             ecurve_feat,    # [5]
             label_feat,     # [6]
             artist_feat,    # [7]
+            sq_feat,        # [8]
         ], dtype=np.float32)
 
         # ── Apply config weights ───────────────────────────────────────────────
@@ -233,6 +251,7 @@ class FeatureBuilder:
             self.weights["energy_curve_similarity"],
             self.weights["label_overlap"],
             self.weights["artist_similarity"],
+            self.weights.get("source_quality_score", 1.0),
         ], dtype=np.float32)
 
         return raw * weight_vec
@@ -252,4 +271,5 @@ class FeatureBuilder:
             "energy_curve_similarity",
             "label_overlap",
             "artist_similarity",
+            "source_quality_score",
         ]

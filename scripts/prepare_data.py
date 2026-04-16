@@ -4,19 +4,21 @@ scripts/prepare_data.py
 Builds the ML-ready dataset from raw corpus CSVs.
 
 Input files (in data/):
-  transitions.csv    — columns: track_a_id, track_b_id, set_id, set_date, source
+  transitions.csv    — columns: track_a_id, track_b_id, set_id, set_date, source,
+                                 source_quality (optional, default 2)
   playlists.csv      — columns: playlist_id, track_id, position, source
   track_metadata.csv — columns: track_id, title, artist, bpm, camelot_key, genre,
                                  label, lastfm_tags, artist_sim_* (optional)
 
 Output files (in data/):
-  corpus_counts.pkl    — dict {(a,b): count}
-  playlist_matrix.pkl  — dict {(a,b): weighted_count}
-  train_pairs.npz      — X_train, y_train, pairs_train
-  val_pairs.npz        — X_val,   y_val,   pairs_val
-  test_pairs.npz       — X_test,  y_test,  pairs_test
-  scaler.pkl           — fitted StandardScaler (apply to val/test only)
-  feature_builder.pkl  — serialised FeatureBuilder
+  corpus_counts.pkl        — dict {(a,b): count}
+  source_quality_corpus.pkl — dict {(a,b): best_quality (1-3)}
+  playlist_matrix.pkl      — dict {(a,b): weighted_count}
+  train_pairs.npz          — X_train, y_train, pairs_train, weights_train
+  val_pairs.npz            — X_val,   y_val,   pairs_val,   weights_val
+  test_pairs.npz           — X_test,  y_test,  pairs_test,  weights_test
+  scaler.pkl               — fitted StandardScaler (apply to val/test only)
+  feature_builder.pkl      — serialised FeatureBuilder
 """
 
 import sys, os
@@ -29,6 +31,7 @@ import random
 from collections import defaultdict
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+import mlflow
 
 import config
 from utils.features import FeatureBuilder
@@ -47,6 +50,23 @@ def build_corpus_counts(transitions_df: pd.DataFrame) -> dict:
     for _, row in tqdm(transitions_df.iterrows(), total=len(transitions_df), desc="Counting transitions"):
         counts[(row["track_a_id"], row["track_b_id"])] += 1
     return dict(counts)
+
+
+def build_source_quality_corpus(transitions_df: pd.DataFrame) -> dict:
+    """
+    For each (A→B) pair, record the best (lowest) source_quality seen across all sets.
+    1=whitelist (best), 2=search+tracklist, 3=search+no-tracklist (worst).
+    Returns dict {(track_a_id, track_b_id): best_quality}.
+    Falls back to quality=2 if column is absent.
+    """
+    sq_map: dict = {}
+    if "source_quality" not in transitions_df.columns:
+        return sq_map
+    for _, row in transitions_df.iterrows():
+        pair    = (row["track_a_id"], row["track_b_id"])
+        quality = int(row.get("source_quality", 2) or 2)
+        sq_map[pair] = min(sq_map.get(pair, quality), quality)
+    return sq_map
 
 
 def build_playlist_matrix(playlists_df: pd.DataFrame, window: int = None) -> dict:
@@ -121,6 +141,17 @@ def main():
     joblib.dump(corpus_counts, f"{config.DATA_DIR}/corpus_counts.pkl")
     print(f"  Unique (A→B) pairs: {len(corpus_counts):,}")
 
+    print("      Building source_quality corpus...")
+    sq_corpus = build_source_quality_corpus(transitions_df)
+    joblib.dump(sq_corpus, f"{config.DATA_DIR}/source_quality_corpus.pkl")
+    if sq_corpus:
+        q_counts = {1: 0, 2: 0, 3: 0}
+        for q in sq_corpus.values():
+            q_counts[q] = q_counts.get(q, 0) + 1
+        print(f"  source_quality pairs: q1={q_counts[1]:,}  q2={q_counts[2]:,}  q3={q_counts[3]:,}")
+    else:
+        print("  source_quality column absent — all pairs default to quality=2")
+
     print("\n[3/6] Building playlist co-occurrence matrix...")
     playlist_matrix = build_playlist_matrix(playlists_df, config.PLAYLIST_WINDOW)
     joblib.dump(playlist_matrix, f"{config.DATA_DIR}/playlist_matrix.pkl")
@@ -132,16 +163,18 @@ def main():
 
     # ── Feature builder — fit normalisation on TRAIN ONLY ─────────
     print("\n[5/6] Building FeatureBuilder (fit on train only)...")
-    train_corpus = build_corpus_counts(train_df)  # counts from training period only
+    train_corpus    = build_corpus_counts(train_df)  # counts from training period only
+    train_sq_corpus = build_source_quality_corpus(train_df)
     max_corpus   = max(train_corpus.values(), default=1)
     max_playlist = max(playlist_matrix.values(), default=1)
 
     fb = FeatureBuilder(
-        corpus_counts    = train_corpus,
-        playlist_matrix  = playlist_matrix,
-        track_metadata   = track_meta_df,
-        max_corpus_count = max_corpus,
-        max_playlist_count = max_playlist,
+        corpus_counts          = train_corpus,
+        playlist_matrix        = playlist_matrix,
+        track_metadata         = track_meta_df,
+        max_corpus_count       = max_corpus,
+        max_playlist_count     = max_playlist,
+        source_quality_corpus  = train_sq_corpus,
     )
     joblib.dump(fb, "models/saved/feature_builder.pkl")
 
@@ -159,9 +192,9 @@ def main():
 
     for split_name, split_df in splits:
         print(f"\n  → {split_name.upper()}")
-        X, y, pairs = build_training_dataset(
-            transitions_df = split_df,
-            track_metadata = track_meta_df,
+        X, y, pairs, weights = build_training_dataset(
+            transitions_df  = split_df,
+            track_metadata  = track_meta_df,
             feature_builder = fb,
             # Fewer negatives for val/test — just enough for evaluation
             ratio = config.NEGATIVE_RATIO if split_name == "train" else 5,
@@ -179,13 +212,37 @@ def main():
 
         np.savez_compressed(
             f"{config.DATA_DIR}/{split_name}_pairs.npz",
-            X=X_scaled, y=y, pairs=pairs,
+            X=X_scaled, y=y, pairs=pairs, weights=weights,
         )
-        print(f"  Saved {split_name}_pairs.npz — shape {X_scaled.shape}")
+        print(f"  Saved {split_name}_pairs.npz — shape {X_scaled.shape}, "
+              f"mean weight={weights.mean():.2f}")
 
     print("\n✅ Data preparation complete.")
     print(f"   Feature weights applied: {config.FEATURE_WEIGHTS}")
     print("\nNext step: python scripts/train.py")
+
+    # ── Log pipeline run to MLflow ────────────────────────────────
+    try:
+        os.makedirs(config.EXPERIMENTS_DIR, exist_ok=True)
+        mlflow.set_tracking_uri(f"sqlite:///{config.EXPERIMENTS_DIR}/mlflow.db")
+        mlflow.set_experiment(config.MLFLOW_EXPERIMENT)
+        with mlflow.start_run(run_name="data_pipeline"):
+            mlflow.set_tag("stage", "data-pipeline")
+            mlflow.log_param("train_cutoff",       config.TRAIN_CUTOFF)
+            mlflow.log_param("val_cutoff",         config.VAL_CUTOFF)
+            mlflow.log_param("negative_ratio",     config.NEGATIVE_RATIO)
+            mlflow.log_param("hard_neg_strategy",  config.HARD_NEGATIVE_STRATEGY)
+            mlflow.log_param("playlist_window",    config.PLAYLIST_WINDOW)
+            mlflow.log_param("n_transitions",      len(transitions_df))
+            mlflow.log_param("n_tracks",           len(track_meta_df))
+            mlflow.log_param("n_playlist_rows",    len(playlists_df))
+            mlflow.log_param("sq_corpus_size",     len(sq_corpus))
+            mlflow.log_param("alembic_revision",   "0001_add_source_quality_to_sets")
+            mlflow.log_dict(config.FEATURE_WEIGHTS, "feature_weights.json")
+            mlflow.log_dict(config.SOURCE_QUALITY_WEIGHTS, "source_quality_weights.json")
+            print(f"  MLflow run logged → experiment='{config.MLFLOW_EXPERIMENT}'")
+    except Exception as e:
+        print(f"  MLflow logging skipped: {e}")
 
 
 if __name__ == "__main__":

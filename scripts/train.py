@@ -37,26 +37,32 @@ FEATURE_NAMES = [
     "energy_curve_similarity",
     "label_overlap",
     "artist_similarity",
+    "source_quality_score",
 ]
 
 
 def load_split(name: str):
     path = f"{config.DATA_DIR}/{name}_pairs.npz"
     data = np.load(path, allow_pickle=True)
-    return data["X"], data["y"].astype(int), list(map(tuple, data["pairs"]))
+    weights = data["weights"].astype(np.float32) if "weights" in data else None
+    return data["X"], data["y"].astype(int), list(map(tuple, data["pairs"])), weights
 
 
-def train_random_forest(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=True):
+def train_random_forest(X_train, y_train, X_val, y_val, pairs_val,
+                        weights_train=None, use_mlflow=True):
     print("\n" + "=" * 60)
     print("STAGE 1 — Random Forest Baseline")
     print("=" * 60)
     print(f"  Train: {X_train.shape}, positive rate: {y_train.mean():.3f}")
+    if weights_train is not None:
+        print(f"  Sample weights: min={weights_train.min():.2f}  "
+              f"max={weights_train.max():.2f}  mean={weights_train.mean():.2f}")
     print(f"  Val:   {X_val.shape}")
 
     model = RandomForestClassifier(**config.RF_PARAMS)
 
     print("\nTraining...")
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=weights_train)
 
     # Validation metrics
     val_scores = model.predict_proba(X_val)[:, 1]
@@ -92,6 +98,7 @@ def train_random_forest(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=Tr
         with mlflow.start_run(run_name="random_forest"):
             mlflow.log_params(config.RF_PARAMS)
             mlflow.log_params({f"weight_{k}": v for k, v in config.FEATURE_WEIGHTS.items()})
+            mlflow.log_params({f"sq_weight_{k}": v for k, v in config.SOURCE_QUALITY_WEIGHTS.items()})
             mlflow.log_metric("val_auc_roc", val_auc)
             for k, v in ranking_metrics.items():
                 mlflow.log_metric(f"val_{k.replace('@', '_at_')}", v)
@@ -102,7 +109,8 @@ def train_random_forest(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=Tr
     return model, ranking_metrics
 
 
-def train_lightgbm(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=True):
+def train_lightgbm(X_train, y_train, X_val, y_val, pairs_val,
+                   weights_train=None, use_mlflow=True):
     try:
         import lightgbm as lgb
     except ImportError:
@@ -132,8 +140,8 @@ def train_lightgbm(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=True):
     )
     val_groups = make_groups(pairs_val)
 
-    train_data = lgb.Dataset(X_train, label=y_train, group=train_groups)
-    val_data   = lgb.Dataset(X_val,   label=y_val,   group=val_groups, reference=train_data)
+    train_data = lgb.Dataset(X_train, label=y_train, group=train_groups, weight=weights_train)
+    val_data   = lgb.Dataset(X_val,   label=y_val,   group=val_groups,  reference=train_data)
 
     callbacks = [
         lgb.early_stopping(stopping_rounds=30, verbose=True),
@@ -179,6 +187,7 @@ def train_lightgbm(X_train, y_train, X_val, y_val, pairs_val, use_mlflow=True):
         with mlflow.start_run(run_name="lightgbm_lambdarank"):
             mlflow.log_params(config.LGBM_PARAMS)
             mlflow.log_params({f"weight_{k}": v for k, v in config.FEATURE_WEIGHTS.items()})
+            mlflow.log_params({f"sq_weight_{k}": v for k, v in config.SOURCE_QUALITY_WEIGHTS.items()})
             for k, v in ranking_metrics.items():
                 mlflow.log_metric(f"val_{k.replace('@', '_at_')}", v)
             mlflow.log_dict({f[0]: float(f[1]) for f in importances}, "feature_importances.json")
@@ -204,17 +213,28 @@ def main():
         print(f"Run `mlflow ui --backend-store-uri sqlite:///{config.EXPERIMENTS_DIR}/mlflow.db` to view\n")
 
     print("Loading datasets...")
-    X_train, y_train, pairs_train = load_split("train")
-    X_val,   y_val,   pairs_val   = load_split("val")
+    X_train, y_train, pairs_train, weights_train = load_split("train")
+    X_val,   y_val,   pairs_val,   _             = load_split("val")
+
+    if weights_train is not None:
+        print(f"Sample weights loaded (source_quality mapping: {config.SOURCE_QUALITY_WEIGHTS})")
+    else:
+        print("No sample weights found in train_pairs.npz — all samples weighted equally.")
 
     results = {}
 
     if args.stage in ("rf", "both"):
-        _, rf_metrics = train_random_forest(X_train, y_train, X_val, y_val, pairs_val, use_mlflow)
+        _, rf_metrics = train_random_forest(
+            X_train, y_train, X_val, y_val, pairs_val,
+            weights_train=weights_train, use_mlflow=use_mlflow,
+        )
         results["random_forest"] = rf_metrics
 
     if args.stage in ("lgbm", "both"):
-        _, lgbm_metrics = train_lightgbm(X_train, y_train, X_val, y_val, pairs_val, use_mlflow)
+        _, lgbm_metrics = train_lightgbm(
+            X_train, y_train, X_val, y_val, pairs_val,
+            weights_train=weights_train, use_mlflow=use_mlflow,
+        )
         results["lightgbm"] = lgbm_metrics
 
     # Side-by-side comparison

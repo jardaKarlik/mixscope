@@ -96,6 +96,11 @@ FEATURE_WEIGHTS = {
 
     # Last.fm / MusicBrainz artist similarity score.
     "artist_similarity":        0.9,
+
+    # How reliably this pair was observed in training data.
+    # 1.0 = seen in a whitelist-channel set, 0.5 = search+tracklist, 0.0 = search+no-tl.
+    # Keep at 1.0 — this is a trust signal, not a musical signal.
+    "source_quality_score":     1.0,
 }
 
 # ─── Feature engineering settings ────────────────────────────────────────────
@@ -149,4 +154,50 @@ RECOMMENDATION_THRESHOLD = 0.35
 MAX_RECOMMENDATIONS = 20
 
 # ─── MLflow experiment name ───────────────────────────────────────────────────
-MLFLOW_EXPERIMENT = "mixscope-v1"
+# Bumped to data-pipeline-v2: source_quality feature + sample weights added
+MLFLOW_EXPERIMENT = "data-pipeline-v2"
+
+# ─── YouTube scraper config ───────────────────────────────────────────────────
+# Canonical definition — scraper_config.yaml mirrors these values.
+# Queries derived from signal-quality evaluation run (Apr 2026).
+YOUTUBE_CONFIG = {
+    "search_queries": [
+        "freetekno DJ set tracklist",
+        "raggatek mix tracklist",
+        "teknival set tracklist",
+        "son de teuf DJ set",
+        "free party tekno set tracklist",
+        "hardtek DJ set tracklist",
+        "raggajungle tekno mix tracklist",
+    ],
+    # UC*** IDs for channels verified to produce high-quality freetekno content.
+    # @handles are resolved to channel IDs at scrape time via channels.list API.
+    "channel_whitelist": [
+        "UCGmHkBFCDCYqnVhIXkMOpYg",   # Boiler Room
+        "UCXIyz409s7bNWVcM-vjfdVA",    # NTS Radio
+        "UC_kRDKYrUlrbtrSiyu5Tflg",    # Resident Advisor
+        "UCpDJl2EmP7Oh90Vyl9VTHtw",    # FACT Magazine
+        "UCnbABMEFSIFR0xekOs0pMpw",    # fabric London
+        "UCZ3KJdCer7oObmPmvGEFUCg",    # Dekmantel
+        "UCM5HMnMKNiP-0PnWaKnMdpA",    # Tresor Berlin
+        "@PulseDrumantek",              # raggatek specialist — resolve at runtime
+        "@P4Kid3RM",                    # freetekno/tribe — resolve at runtime
+    ],
+    # Titles containing any of these strings are skipped (case-insensitive).
+    # Prevents mainstream hard techno, tribal house, and venue-branded content.
+    "title_exclude_keywords": [
+        "hard techno",
+        "tribal house",
+        "warehouse",
+        "boiler room",
+    ],
+    "min_views":  100,
+    "date_from":  None,
+}
+
+# ─── Source quality weights (for ML sample weighting) ─────────────────────────
+# Used in train.py as sample_weight per transition.
+#   1 = whitelist channel (high trust)  → 3x weight
+#   2 = search result, tracklist confirmed (medium trust) → 1x weight
+#   3 = search result, no tracklist (low trust) → 0.3x weight
+SOURCE_QUALITY_WEIGHTS = {1: 3.0, 2: 1.0, 3: 0.3}

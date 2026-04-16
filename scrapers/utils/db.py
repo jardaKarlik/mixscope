@@ -76,14 +76,15 @@ CREATE INDEX IF NOT EXISTS tracks_bpm ON tracks(bpm);
 
 -- DJ set metadata
 CREATE TABLE IF NOT EXISTS sets (
-    set_id      TEXT PRIMARY KEY,
-    title       TEXT,
-    dj          TEXT,
-    source      TEXT NOT NULL,               -- youtube|mixcloud|soundcloud|1001tracklists|ra
-    source_url  TEXT UNIQUE,
-    set_date    DATE,
-    duration_s  INTEGER,
-    scraped_at  TIMESTAMPTZ DEFAULT NOW()
+    set_id         TEXT PRIMARY KEY,
+    title          TEXT,
+    dj             TEXT,
+    source         TEXT NOT NULL,               -- youtube|mixcloud|soundcloud|1001tracklists|ra
+    source_url     TEXT UNIQUE,
+    set_date       DATE,
+    duration_s     INTEGER,
+    source_quality SMALLINT NOT NULL DEFAULT 2, -- 1=whitelist 2=search+tracklist 3=search+no-tracklist
+    scraped_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Ordered transitions within DJ sets — the core training signal
@@ -174,11 +175,17 @@ def upsert_tracks(tracks: list[dict]) -> int:
 
 
 def upsert_set(set_data: dict) -> bool:
-    """Insert a DJ set, skip if source_url already seen. Returns True if new."""
+    """Insert a DJ set, skip if source_url already seen. Returns True if new.
+
+    set_data keys: set_id, title, dj, source, source_url, set_date, duration_s,
+                   source_quality (optional, defaults to 2)
+    """
+    set_data.setdefault("source_quality", 2)
     sql = """
-        INSERT INTO sets (set_id, title, dj, source, source_url, set_date, duration_s)
+        INSERT INTO sets (set_id, title, dj, source, source_url, set_date, duration_s,
+                          source_quality)
         VALUES (%(set_id)s, %(title)s, %(dj)s, %(source)s, %(source_url)s,
-                %(set_date)s, %(duration_s)s)
+                %(set_date)s, %(duration_s)s, %(source_quality)s)
         ON CONFLICT (source_url) DO NOTHING
         RETURNING set_id
     """

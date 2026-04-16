@@ -140,19 +140,32 @@ def build_training_dataset(
     track_metadata: pd.DataFrame,
     feature_builder,
     ratio: int = None,
-) -> Tuple[np.ndarray, np.ndarray, List[Tuple[str, str]]]:
+) -> Tuple[np.ndarray, np.ndarray, List[Tuple[str, str]], np.ndarray]:
     """
     Full pipeline: transitions → positive pairs → hard negatives → feature matrix.
 
     Returns:
-        X:     feature matrix (N, 8)
-        y:     labels (N,) — 1 for positive, 0 for negative
-        pairs: list of (track_a_id, track_b_id) — for debugging
+        X:       feature matrix (N, 9)
+        y:       labels (N,) — 1 for positive, 0 for negative
+        pairs:   list of (track_a_id, track_b_id) — for debugging
+        weights: sample weights (N,) — from config.SOURCE_QUALITY_WEIGHTS
+                 Positives use weight mapped from source_quality column (default 2 → 1.0).
+                 Negatives always get weight 1.0.
     """
     print("Building positive pairs from transitions...")
     positive_pairs = list(zip(transitions_df["track_a_id"], transitions_df["track_b_id"]))
     positive_set   = set(positive_pairs) | {(b, a) for a, b in positive_pairs}
     print(f"  → {len(positive_pairs):,} positive pairs")
+
+    # Sample weights for positives from source_quality column (default 2 if absent)
+    sq_weights_map = config.SOURCE_QUALITY_WEIGHTS
+    if "source_quality" in transitions_df.columns:
+        positive_weights = [
+            sq_weights_map.get(int(sq), 1.0)
+            for sq in transitions_df["source_quality"].fillna(2)
+        ]
+    else:
+        positive_weights = [sq_weights_map[2]] * len(positive_pairs)
 
     print(f"Mining hard negatives (strategy={config.HARD_NEGATIVE_STRATEGY}, ratio={ratio or config.NEGATIVE_RATIO})...")
     negative_pairs = build_negative_pairs(
@@ -160,12 +173,14 @@ def build_training_dataset(
     )
     print(f"  → {len(negative_pairs):,} negative pairs")
 
-    all_pairs  = positive_pairs + negative_pairs
-    all_labels = [1] * len(positive_pairs) + [0] * len(negative_pairs)
+    all_pairs   = positive_pairs + negative_pairs
+    all_labels  = [1] * len(positive_pairs) + [0] * len(negative_pairs)
+    all_weights = positive_weights + [1.0] * len(negative_pairs)
 
     print("Building feature vectors...")
     X = feature_builder.build_batch(all_pairs)
-    y = np.array(all_labels, dtype=np.int32)
+    y = np.array(all_labels,  dtype=np.int32)
+    w = np.array(all_weights, dtype=np.float32)
 
     print(f"  → Dataset shape: {X.shape}, positive rate: {y.mean():.3f}")
-    return X, y, all_pairs
+    return X, y, all_pairs, w
