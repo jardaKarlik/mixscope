@@ -99,10 +99,10 @@ residentadvisor:
   enabled: true
   # GraphQL API: ra.co/graphql — no auth required
   # Episodes fetched by walking backward from latest ID via podcast(id: X)
-  date_from: "2025-01-01"        # TEST RUN window — change to 2020-01-01 for production
-  max_per_run: 10                 # TEST RUN — raise to 200 for production
+  date_from: "2020-01-01"        # go back to 2020 on first production run
+  max_per_run: 200
   min_tracklist_length: 5         # skip episodes with fewer parsed tracks
-  stop_on_known: false            # set true for prod (stops once caught up to existing DB)
+  stop_on_known: true             # stops once all recent episodes are known (incremental runs)
   requests_per_second: 1          # 1 req/s is empirically safe
 
 # ─── Global settings ──────────────────────────────────────────────────────────
