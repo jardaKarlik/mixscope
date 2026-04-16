@@ -47,10 +47,14 @@ FP_RE = re.compile("|".join(FALSE_POSITIVE_SIGNALS), re.IGNORECASE)
 
 
 def get_api_key() -> str:
-    client = secretmanager.SecretManagerServiceClient()
-    path   = f"projects/{GCP_PROJECT}/secrets/{SECRET_NAME}/versions/latest"
-    resp   = client.access_secret_version(request={"name": path})
-    return resp.payload.data.decode("utf-8").strip()
+    # Read from temp file written by: gcloud secrets versions access latest \
+    #   --secret="mixscope-youtube-api-key" --project="mixsource" > /tmp/yt_key.txt
+    key_file = "/tmp/yt_key.txt"
+    try:
+        with open(key_file) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        raise RuntimeError(f"Key file not found: {key_file}")
 
 
 def has_tracklist(description: str) -> tuple[bool, str]:
