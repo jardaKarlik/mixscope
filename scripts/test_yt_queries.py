@@ -7,12 +7,12 @@ and tracklist detection signal. Flags likely false positives.
 import re
 import sys
 import time
+import subprocess
 from isodate import parse_duration
-from google.cloud import secretmanager
 from googleapiclient.discovery import build
 
 GCP_PROJECT  = "mixsource"
-SECRET_NAME  = "youtube_api_key"
+SECRET_NAME  = "mixscope-youtube-api-key"
 YT_API       = "youtube"
 YT_VERSION   = "v3"
 
@@ -47,14 +47,15 @@ FP_RE = re.compile("|".join(FALSE_POSITIVE_SIGNALS), re.IGNORECASE)
 
 
 def get_api_key() -> str:
-    # Read from temp file written by: gcloud secrets versions access latest \
-    #   --secret="mixscope-youtube-api-key" --project="mixsource" > /tmp/yt_key.txt
-    key_file = "/tmp/yt_key.txt"
-    try:
-        with open(key_file) as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        raise RuntimeError(f"Key file not found: {key_file}")
+    """Fetch key via gcloud CLI — works anywhere gcloud is authenticated."""
+    result = subprocess.run(
+        ["gcloud", "secrets", "versions", "access", "latest",
+         f"--secret={SECRET_NAME}", f"--project={GCP_PROJECT}"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gcloud error: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def has_tracklist(description: str) -> tuple[bool, str]:
@@ -159,7 +160,7 @@ def search_and_detail(yt, query: str, max_results: int = 20) -> list[dict]:
 
 
 def main():
-    print("Fetching YouTube API key from Secret Manager...")
+    print("Fetching YouTube API key via gcloud...")
     try:
         api_key = get_api_key()
     except Exception as e:
